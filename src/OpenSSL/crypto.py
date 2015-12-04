@@ -29,6 +29,7 @@ FILETYPE_TEXT = 2 ** 16 - 1
 
 TYPE_RSA = _lib.EVP_PKEY_RSA
 TYPE_DSA = _lib.EVP_PKEY_DSA
+TYPE_EC = _lib.EVP_PKEY_EC
 
 
 class Error(Exception):
@@ -175,7 +176,7 @@ class PKey(object):
         This generates a key "into" the this object.
 
         :param type: The key type.
-        :type type: :py:data:`TYPE_RSA` or :py:data:`TYPE_DSA`
+        :type type: :py:data:`TYPE_RSA` or :py:data:`TYPE_DSA` or :py:data:`TYPE_EC`
         :param bits: The number of bits.
         :type bits: :py:data:`int` ``>= 0``
         :raises TypeError: If :py:data:`type` or :py:data:`bits` isn't
@@ -229,6 +230,29 @@ class PKey(object):
             if not _lib.EVP_PKEY_assign_DSA(self._pkey, dsa):
                 # TODO: This is untested.
                 _raise_current_error()
+
+        elif type == TYPE_EC:
+            ## enable 3 bit lengths using standard curves
+            if bits == 256:
+                curve = "X9_62_prime256v1"
+            elif bits == 384:
+                curve = "secp384r1"
+            elif bits == 521:
+                bits = "secp521r1"
+            else:
+                raise Error("Unsupported length for EC")
+
+            nid = getattr(_lib, "NID_" + curve)
+            ecdsa = _lib.EC_KEY_new( )
+            group = _lib.EC_GROUP_new_by_curve_name(nid);
+            _lib.EC_GROUP_set_asn1_flag(group, _lib.OPENSSL_EC_NAMED_CURVE)
+            _lib.EC_KEY_set_group(ecdsa, group)
+
+            result = _lib.EC_KEY_generate_key(ecdsa)
+            if result == 0:
+                _raise_current_error()
+
+            result = _lib.EVP_PKEY_assign_EC_KEY(self._pkey, ecdsa)
         else:
             raise Error("No such key type")
 
@@ -247,6 +271,13 @@ class PKey(object):
         """
         if self._only_public:
             raise TypeError("public key only")
+
+        if _lib.EVP_PKEY_type(self._pkey.type) == TYPE_EC:
+            ec = _lib.EVP_PKEY_get1_EC_KEY(self._pkey)
+            ec = _ffi.gc(ec, _lib.EC_KEY_free)
+            result = _lib.EC_KEY_check_key(ec)
+            if result:
+                return True
 
         if _lib.EVP_PKEY_type(self._pkey.type) != _lib.EVP_PKEY_RSA:
             raise TypeError("key type unsupported")
